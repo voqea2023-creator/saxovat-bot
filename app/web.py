@@ -65,9 +65,10 @@ async def dashboard(request: Request, session: AsyncSession = Depends(get_sessio
     board = await svc.leaderboard(session, limit=200)
     rows = []
     for ref, cnt in board:
-        name = ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
+        name = ref.reg_name or ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
         rows.append({
             "name": name,
+            "phone": ref.phone or "—",
             "username": ref.username,
             "id": ref.id,
             "count": cnt,
@@ -95,8 +96,8 @@ async def rewards_page(
     data = await svc.all_rewards(session, status=status or None, search=q or None)
     items = []
     for reward, ref in data:
-        name = ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
-        items.append({"r": reward, "name": name, "username": ref.username})
+        name = ref.reg_name or ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
+        items.append({"r": reward, "name": name, "phone": ref.phone or "—", "username": ref.username})
     return templates.TemplateResponse(
         request,
         "rewards.html",

@@ -38,6 +38,27 @@ async def init_db() -> None:
     from . import models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _migrate()
+
+
+async def _migrate() -> None:
+    """
+    Oddiy migratsiya: mavjud jadvalga yangi ustunlarni qo'shadi.
+    create_all eski jadvalni o'zgartirmagani uchun, yangi ustunlarni qo'lda qo'shamiz.
+    Ustun allaqachon bo'lsa, xatoni e'tiborsiz qoldiramiz.
+    """
+    from sqlalchemy import text
+    statements = [
+        "ALTER TABLE referrers ADD COLUMN reg_name VARCHAR(255)",
+        "ALTER TABLE referrers ADD COLUMN phone VARCHAR(32)",
+    ]
+    for stmt in statements:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(stmt))
+        except Exception:
+            # ustun mavjud yoki qo'llab-quvvatlanmaydi — o'tkazib yuboramiz
+            pass
 
 
 async def get_session() -> AsyncSession:

@@ -1,15 +1,22 @@
 """
 Telegram bot (aiogram 3).
 Asosiy vazifa: gemifikatsion referral tizimi.
-- /start  -> foydalanuvchini ro'yxatga oladi, unikal taklif havolasini beradi.
+- /start  -> ism va telefon so'raydi, keyin unikal taklif havolasini beradi.
 - chat_member yangilanishi -> kim kimni qo'shganini aniqlaydi va hisoblaydi.
 - Daraja yutilganda -> chegirma kodini beradi.
 """
+import os
+import re
+import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile,
 )
 
 from .config import settings
@@ -22,6 +29,15 @@ router = Router()
 
 # Kanalning raqamli chat ID si (startupda aniqlanadi).
 CHANNEL_CHAT_ID: int | None = None
+
+# Welcome banner rasmi
+WELCOME_IMAGE = os.path.join(os.path.dirname(__file__), "assets", "welcome.png")
+
+
+class Reg(StatesGroup):
+    """Ro'yxatdan o'tish bosqichlari."""
+    name = State()
+    phone = State()
 
 
 def _channel_arg() -> int | str:
@@ -49,13 +65,43 @@ def _progress_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _share_post(invite_link: str) -> str:
-    """Foydalanuvchi tarqatadigan tayyor post matni."""
+def _phone_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+# ----------------- Matnlar -----------------
+
+def _welcome_caption(name: str) -> str:
+    tiers = "\n".join(f"🎁 <b>{t.threshold} ta</b> — {t.title}" for t in rw.tiers_sorted())
     return (
-        f"🏥 <b>{settings.CHANNEL_TITLE}</b> klinikasi kanaliga qo'shiling!\n\n"
-        "👶 Pediatr · 🧠 Nevropatolog · 🤰 Ginekolog · 🎀 Mammolog\n"
-        "Bepul maslahatlar, jonli efirlar va savol-javoblar.\n\n"
-        f"👉 Qo'shilish: {invite_link}"
+        f"Assalomu alaykum, <b>{name}</b>! 👋\n\n"
+        f"🏥 <b>{settings.CHANNEL_TITLE}</b> referal dasturiga xush kelibsiz.\n\n"
+        "Do'stlaringizni klinikamiz kanaliga taklif qiling va sovrinlar yutib oling:\n\n"
+        f"{tiers}\n\n"
+        "Quyida — do'stlaringizga yuborish uchun tayyor post 👇"
+    )
+
+
+def _share_post(invite_link: str) -> str:
+    """Do'stlarga yuborish uchun toza, ma'noli post (forward qilishga tayyor)."""
+    return (
+        f"🏥 <b>{settings.CHANNEL_TITLE}</b> — sog'lig'ingiz bizning g'amxo'rligimiz\n\n"
+        "Klinikamiz Telegram kanaliga qo'shiling va malakali shifokorlarimizdan "
+        "doimiy yo'l-yo'riq oling:\n\n"
+        "👶 <b>Pediatr</b> — bolangiz salomatligi va to'g'ri rivojlanishi\n"
+        "🧠 <b>Nevropatolog</b> — asab tizimi va uyqu masalalari\n"
+        "🤰 <b>Ginekolog</b> — ayollar salomatligi va homiladorlik\n"
+        "🎀 <b>Mammolog</b> — ko'krak salomatligi va erta tashxis\n\n"
+        "Kanalda sizni kutmoqda:\n"
+        "✅ Bepul foydali maslahatlar\n"
+        "🔴 Haftada bir necha bir jonli efir (savol-javob)\n"
+        "💬 Savollaringizga shifokordan video javoblar\n\n"
+        f"👉 Qo'shilish: {invite_link}\n"
+        "📍 Nurafshon shahar, Toshkent viloyati"
     )
 
 
@@ -74,40 +120,107 @@ async def ensure_invite_link(bot: Bot, user_id: int) -> str:
     return link_obj.invite_link
 
 
-# ----------------- /start -----------------
-
-@router.message(Command("start"))
-async def cmd_start(message: Message, bot: Bot):
-    user = message.from_user
-    async with SessionLocal() as session:
-        await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
-
+async def send_welcome_sequence(bot: Bot, chat_id: int, user_id: int, name: str):
+    """Welcome ketma-ketligi: avval rasm+matn, keyin (gap bilan) tayyor post."""
     try:
-        link = await ensure_invite_link(bot, user.id)
-    except Exception as e:  # bot admin emasligi yoki kanal noto'g'ri
+        link = await ensure_invite_link(bot, user_id)
+    except Exception:
         logger.exception("Invite link yaratib bo'lmadi")
-        await message.answer(
+        await bot.send_message(
+            chat_id,
             "Kechirasiz, hozir havola yaratib bo'lmadi. Iltimos keyinroq qayta urinib ko'ring "
-            "yoki klinika administratoriga murojaat qiling."
+            "yoki klinika administratoriga murojaat qiling.",
         )
         return
 
-    tiers_text = "\n".join(
-        f"• <b>{t.threshold} ta</b> — {t.title}" for t in rw.tiers_sorted()
+    # 1-xabar: rasm + chiroyli matn
+    await bot.send_chat_action(chat_id, "upload_photo")
+    caption = _welcome_caption(name)
+    try:
+        await bot.send_photo(
+            chat_id, FSInputFile(WELCOME_IMAGE), caption=caption,
+            reply_markup=_progress_keyboard(),
+        )
+    except Exception:
+        # rasm topilmasa, faqat matn yuboramiz
+        logger.warning("Welcome rasm yuborilmadi, matn yuborilmoqda")
+        await bot.send_message(chat_id, caption, reply_markup=_progress_keyboard(),
+                               disable_web_page_preview=True)
+
+    # 2-xabar: gap bilan, tayyor post
+    await asyncio.sleep(1.4)
+    await bot.send_chat_action(chat_id, "typing")
+    await asyncio.sleep(0.6)
+    await bot.send_message(chat_id, _share_post(link), disable_web_page_preview=True)
+
+
+# ----------------- /start va ro'yxatdan o'tish -----------------
+
+@router.message(Command("start"))
+async def cmd_start(message: Message, bot: Bot, state: FSMContext):
+    await state.clear()
+    user = message.from_user
+    async with SessionLocal() as session:
+        await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
+        registered = await svc.is_registered(session, user.id)
+
+    if registered:
+        async with SessionLocal() as session:
+            ref = await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
+        await send_welcome_sequence(bot, message.chat.id, user.id, ref.reg_name or _full_name(user))
+        return
+
+    # Ro'yxatdan o'tish: ism so'raymiz
+    await state.set_state(Reg.name)
+    await message.answer(
+        f"Assalomu alaykum! 👋\n\n"
+        f"🏥 <b>{settings.CHANNEL_TITLE}</b> referal dasturiga xush kelibsiz.\n\n"
+        "Ro'yxatdan o'tish uchun, iltimos, <b>ism va familiyangizni</b> yozing:"
     )
 
-    text = (
-        f"Assalomu alaykum, <b>{_full_name(user)}</b>! 👋\n\n"
-        f"<b>{settings.CHANNEL_TITLE}</b> referal dasturiga xush kelibsiz.\n"
-        "Do'stlaringizni kanalimizga qo'shing va chegirmalar yutib oling!\n\n"
-        "🎁 <b>Mukofotlar:</b>\n"
-        f"{tiers_text}\n\n"
-        "🔗 <b>Sizning shaxsiy havolangiz:</b>\n"
-        f"{link}\n\n"
-        "Quyidagi tayyor postni do'stlaringizga yuboring 👇"
+
+@router.message(Reg.name)
+async def reg_name(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text or text.startswith("/") or len(text) < 2:
+        await message.answer("Iltimos, ism va familiyangizni matn ko'rinishida yozing:")
+        return
+    async with SessionLocal() as session:
+        await svc.set_registration(session, message.from_user.id, name=text[:255])
+    await state.set_state(Reg.phone)
+    await message.answer(
+        f"Rahmat, <b>{text}</b>! 📱\n\n"
+        "Endi <b>telefon raqamingizni</b> yuboring. Pastdagi tugmani bossangiz — avtomatik yuboriladi, "
+        "yoki raqamni qo'lda yozing:",
+        reply_markup=_phone_keyboard(),
     )
-    await message.answer(text, reply_markup=_progress_keyboard(), disable_web_page_preview=True)
-    await message.answer(_share_post(link), disable_web_page_preview=True)
+
+
+@router.message(Reg.phone)
+async def reg_phone(message: Message, bot: Bot, state: FSMContext):
+    phone = None
+    if message.contact and message.contact.phone_number:
+        phone = message.contact.phone_number
+    elif message.text:
+        digits = re.sub(r"[^\d+]", "", message.text)
+        if len(re.sub(r"\D", "", digits)) >= 7:
+            phone = digits
+
+    if not phone:
+        await message.answer(
+            "Telefon raqami noto'g'ri. Iltimos, pastdagi tugma orqali yuboring yoki "
+            "raqamni to'liq yozing (masalan: +998901234567):",
+            reply_markup=_phone_keyboard(),
+        )
+        return
+
+    user = message.from_user
+    async with SessionLocal() as session:
+        await svc.set_registration(session, user.id, phone=phone[:32])
+        ref = await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
+    await state.clear()
+    await message.answer("✅ Ro'yxatdan o'tdingiz! Rahmat.", reply_markup=ReplyKeyboardRemove())
+    await send_welcome_sequence(bot, message.chat.id, user.id, ref.reg_name or _full_name(user))
 
 
 # ----------------- /help -----------------
@@ -116,7 +229,7 @@ async def cmd_start(message: Message, bot: Bot):
 async def cmd_help(message: Message):
     await message.answer(
         "ℹ️ <b>Qanday ishlaydi?</b>\n\n"
-        "1. /start bosing — sizga shaxsiy taklif havolasi beriladi.\n"
+        "1. /start bosing — ism va telefoningizni kiritasiz, sizga shaxsiy havola beriladi.\n"
         "2. Havolani do'stlaringizga ulashing.\n"
         "3. Ular havola orqali kanalga qo'shilsa, avtomatik hisoblanadi.\n"
         "4. Belgilangan songa yetganda chegirma kodini olasiz.\n"
@@ -162,7 +275,6 @@ async def cb_progress(call: CallbackQuery):
 @router.callback_query(F.data == "my_link")
 async def cb_link(call: CallbackQuery, bot: Bot):
     link = await ensure_invite_link(bot, call.from_user.id)
-    await call.message.answer(f"🔗 Sizning havolangiz:\n{link}", disable_web_page_preview=True)
     await call.message.answer(_share_post(link), disable_web_page_preview=True)
     await call.answer()
 
@@ -186,7 +298,7 @@ async def cmd_stats(message: Message):
         "🏆 <b>TOP-10:</b>",
     ]
     for i, (ref, cnt) in enumerate(board, 1):
-        name = ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
+        name = ref.reg_name or ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
         lines.append(f"{i}. {name} — {cnt} ta")
     await message.answer("\n".join(lines))
 
@@ -195,13 +307,11 @@ async def cmd_stats(message: Message):
 
 @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_join(event: ChatMemberUpdated, bot: Bot):
-    # Faqat bizning kanalimiz
     if CHANNEL_CHAT_ID is not None and event.chat.id != CHANNEL_CHAT_ID:
         return
 
     invite = event.invite_link
     if invite is None:
-        # Havolasiz qo'shilgan (to'g'ridan-to'g'ri) — referralga sanalmaydi
         return
 
     joined = event.new_chat_member.user
@@ -225,7 +335,6 @@ async def on_join(event: ChatMemberUpdated, bot: Bot):
         new_rewards = await svc.award_new_rewards(session, referrer.id)
         count = await svc.active_count(session, referrer.id)
 
-    # Referrerga xabar
     try:
         await bot.send_message(
             referrer.id,

@@ -17,6 +17,10 @@ class Referrer(Base):
     username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Ro'yxatdan o'tishda so'raladigan ism va telefon (dashboardда ko'rinadi).
+    reg_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     # Shu odamga biriktirilgan unikal taklif havolasi.
     invite_link: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     invite_link_name: Mapped[str | None] = mapped_column(String(64), nullable=True)

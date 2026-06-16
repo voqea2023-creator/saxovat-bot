@@ -36,6 +36,23 @@ async def get_or_create_referrer(
     return ref
 
 
+async def set_registration(session: AsyncSession, user_id: int, name: str | None = None,
+                           phone: str | None = None) -> None:
+    """Ro'yxatdan o'tishda so'ralgan ism va/yoki telefonni saqlaydi."""
+    ref = await session.get(Referrer, user_id)
+    if ref:
+        if name is not None:
+            ref.reg_name = name
+        if phone is not None:
+            ref.phone = phone
+        await session.commit()
+
+
+async def is_registered(session: AsyncSession, user_id: int) -> bool:
+    ref = await session.get(Referrer, user_id)
+    return bool(ref and ref.reg_name and ref.phone)
+
+
 async def set_invite_link(session: AsyncSession, user_id: int, link: str, name: str) -> None:
     ref = await session.get(Referrer, user_id)
     if ref:
