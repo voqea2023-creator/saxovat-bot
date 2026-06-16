@@ -1,0 +1,37 @@
+# Render.com uchun "blueprint". GitHub repo bilan bog'lab, bir tugmada deploy qiladi.
+# Bepul Postgres bilan birga keladi.
+services:
+  - type: web
+    name: saxovat-bot
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /healthz
+    envVars:
+      - key: BOT_TOKEN
+        sync: false              # qiymatni Render panelida qo'lda kiritasiz (maxfiy)
+      - key: CHANNEL_ID
+        sync: false
+      - key: CHANNEL_TITLE
+        value: "Sahovat Shifo"
+      - key: ADMIN_IDS
+        sync: false
+      - key: RUN_MODE
+        value: webhook
+      - key: WEBHOOK_BASE_URL
+        sync: false              # deploydan keyin Render bergan URL ni kiritasiz
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: saxovat-db
+          property: connectionString
+
+databases:
+  - name: saxovat-db
+    plan: free
