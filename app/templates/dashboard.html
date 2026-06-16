@@ -51,7 +51,7 @@
       <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
           <thead class="table-light">
-            <tr><th>#</th><th>Ism</th><th>Username</th><th>Telegram ID</th>
+            <tr><th>#</th><th>Ism</th><th>Telefon</th><th>Username</th><th>Telegram ID</th>
                 <th class="text-end">Faol a'zo</th><th>Keyingi daraja</th></tr>
           </thead>
           <tbody>
@@ -59,13 +59,14 @@
             <tr>
               <td>{{ loop.index }}</td>
               <td>{{ r.name }}</td>
+              <td>{{ r.phone }}</td>
               <td>{% if r.username %}@{{ r.username }}{% else %}—{% endif %}</td>
               <td><code>{{ r.id }}</code></td>
               <td class="text-end"><span class="badge bg-primary fs-6">{{ r.count }}</span></td>
               <td>{% if r.next %}{{ r.next.threshold }} ta ({{ r.next.threshold - r.count }} qoldi){% else %}<span class="text-success">🏆 hammasi</span>{% endif %}</td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="text-center text-muted py-4">Hozircha ma'lumot yo'q</td></tr>
+            <tr><td colspan="7" class="text-center text-muted py-4">Hozircha ma'lumot yo'q</td></tr>
             {% endfor %}
           </tbody>
         </table>

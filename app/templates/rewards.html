@@ -39,13 +39,14 @@
       <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
           <thead class="table-light">
-            <tr><th>Kod</th><th>Egasi</th><th>Daraja</th><th>Chegirma</th><th>Holat</th><th class="text-end">Amal</th></tr>
+            <tr><th>Kod</th><th>Egasi</th><th>Telefon</th><th>Daraja</th><th>Chegirma</th><th>Holat</th><th class="text-end">Amal</th></tr>
           </thead>
           <tbody>
             {% for it in items %}
             <tr>
               <td><code>{{ it.r.code }}</code></td>
               <td>{{ it.name }}{% if it.username %} <span class="text-muted">(@{{ it.username }})</span>{% endif %}</td>
+              <td>{{ it.phone }}</td>
               <td>{{ it.r.tier_threshold }} ta</td>
               <td style="max-width:340px">{{ it.r.title }}</td>
               <td>
@@ -69,7 +70,7 @@
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="text-center text-muted py-4">Chegirmalar topilmadi</td></tr>
+            <tr><td colspan="7" class="text-center text-muted py-4">Chegirmalar topilmadi</td></tr>
             {% endfor %}
           </tbody>
         </table>
