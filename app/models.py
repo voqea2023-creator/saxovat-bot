@@ -21,6 +21,11 @@ class Referrer(Base):
     reg_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # Bu foydalanuvchini kim taklif qilgan (piramida daraxti uchun). NULL = to'g'ridan-to'g'ri kelgan.
+    referred_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Kanalga obuna bo'lganmi (ball shu paytda beriladi).
+    joined_channel: Mapped[bool] = mapped_column(default=False)
+
     # Shu odamga biriktirilgan unikal taklif havolasi.
     invite_link: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     invite_link_name: Mapped[str | None] = mapped_column(String(64), nullable=True)

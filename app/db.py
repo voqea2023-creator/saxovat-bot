@@ -51,6 +51,8 @@ async def _migrate() -> None:
     statements = [
         "ALTER TABLE referrers ADD COLUMN reg_name VARCHAR(255)",
         "ALTER TABLE referrers ADD COLUMN phone VARCHAR(32)",
+        "ALTER TABLE referrers ADD COLUMN referred_by BIGINT",
+        "ALTER TABLE referrers ADD COLUMN joined_channel BOOLEAN DEFAULT FALSE",
     ]
     for stmt in statements:
         try:

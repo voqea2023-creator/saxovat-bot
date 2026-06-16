@@ -11,7 +11,9 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION
+from aiogram.filters import (
+    Command, CommandObject, ChatMemberUpdatedFilter, JOIN_TRANSITION, LEAVE_TRANSITION,
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -29,9 +31,25 @@ router = Router()
 
 # Kanalning raqamli chat ID si (startupda aniqlanadi).
 CHANNEL_CHAT_ID: int | None = None
+# Botning @username (deep-link havola yasash uchun, startupda aniqlanadi).
+BOT_USERNAME: str | None = None
 
 # Welcome banner rasmi
 WELCOME_IMAGE = os.path.join(os.path.dirname(__file__), "assets", "welcome.png")
+
+
+def channel_url() -> str:
+    """Kanalga obuna bo'lish havolasi (ommaviy kanal uchun t.me/username)."""
+    val = settings.CHANNEL_ID.strip()
+    if val.startswith("@"):
+        return f"https://t.me/{val[1:]}"
+    return val  # raqamli ID bo'lsa, kanal sozlamasida ommaviy havola ko'rsatilsin
+
+
+def referral_link(user_id: int) -> str:
+    """Foydalanuvchining shaxsiy taklif havolasi — botga deep-link."""
+    uname = BOT_USERNAME or settings.BOT_USERNAME or "your_bot"
+    return f"https://t.me/{uname}?start=ref{user_id}"
 
 
 class Reg(StatesGroup):
@@ -59,8 +77,9 @@ def _full_name(user) -> str:
 def _progress_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url=channel_url())],
             [InlineKeyboardButton(text="📊 Mening natijam", callback_data="my_progress")],
-            [InlineKeyboardButton(text="🔗 Havolamni qayta olish", callback_data="my_link")],
+            [InlineKeyboardButton(text="🔗 Taklif havolam", callback_data="my_link")],
         ]
     )
 
@@ -80,13 +99,17 @@ def _welcome_caption(name: str) -> str:
     return (
         f"Assalomu alaykum, <b>{name}</b>! 👋\n\n"
         f"🏥 <b>{settings.CHANNEL_TITLE}</b> referal dasturiga xush kelibsiz.\n\n"
-        "Do'stlaringizni klinikamiz kanaliga taklif qiling va sovrinlar yutib oling:\n\n"
+        "📌 <b>Ikki oddiy qadam:</b>\n"
+        "1️⃣ Klinikamiz kanaliga obuna bo'ling (pastdagi tugma).\n"
+        "2️⃣ Do'stlaringizni shaxsiy havolangiz orqali taklif qiling.\n\n"
+        "Do'stingiz havola orqali botga kirib, kanalga obuna bo'lsa — sizga ball! "
+        "Belgilangan songa yetganda chegirma yutasiz:\n\n"
         f"{tiers}\n\n"
         "Quyida — do'stlaringizga yuborish uchun tayyor post 👇"
     )
 
 
-def _share_post(invite_link: str) -> str:
+def _share_post(referral: str) -> str:
     """Do'stlarga yuborish uchun toza, ma'noli post (forward qilishga tayyor)."""
     return (
         f"🏥 <b>{settings.CHANNEL_TITLE}</b> — sog'lig'ingiz bizning g'amxo'rligimiz\n\n"
@@ -101,41 +124,17 @@ def _share_post(invite_link: str) -> str:
         "✅ Bepul foydali maslahatlar\n"
         "🔴 Haftalik jonli efirlar (savol-javob)\n"
         "💬 Savollaringizga shifokordan video javoblar\n\n"
-        f"👉 Qo'shilish: {invite_link}\n"
+        f"👉 Qo'shilish: {referral}\n"
         "📞 95-515-19-50 · 91-770-05-32\n"
         "📍 Nurafshon shahar, Toshkent viloyati"
     )
 
 
-async def ensure_invite_link(bot: Bot, user_id: int) -> str:
-    """Foydalanuvchi uchun unikal taklif havolasi mavjudligini ta'minlaydi."""
-    from .models import Referrer
-    async with SessionLocal() as session:
-        ref = await session.get(Referrer, user_id)
-        if ref and ref.invite_link:
-            return ref.invite_link
-
-    name = f"ref-{user_id}"
-    link_obj = await bot.create_chat_invite_link(chat_id=_channel_arg(), name=name)
-    async with SessionLocal() as session:
-        await svc.set_invite_link(session, user_id, link_obj.invite_link, name)
-    return link_obj.invite_link
-
-
 async def send_welcome_sequence(bot: Bot, chat_id: int, user_id: int, name: str):
-    """Welcome ketma-ketligi: avval rasm+matn, keyin (gap bilan) tayyor post."""
-    try:
-        link = await ensure_invite_link(bot, user_id)
-    except Exception:
-        logger.exception("Invite link yaratib bo'lmadi")
-        await bot.send_message(
-            chat_id,
-            "Kechirasiz, hozir havola yaratib bo'lmadi. Iltimos keyinroq qayta urinib ko'ring "
-            "yoki klinika administratoriga murojaat qiling.",
-        )
-        return
+    """Welcome ketma-ketligi: avval rasm+matn (kanal tugmasi bilan), keyin (gap bilan) tayyor post."""
+    link = referral_link(user_id)
 
-    # 1-xabar: rasm + chiroyli matn
+    # 1-xabar: rasm + chiroyli matn + kanal/havola tugmalari
     await bot.send_chat_action(chat_id, "upload_photo")
     caption = _welcome_caption(name)
     try:
@@ -144,12 +143,11 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, user_id: int, name: str)
             reply_markup=_progress_keyboard(),
         )
     except Exception:
-        # rasm topilmasa, faqat matn yuboramiz
         logger.warning("Welcome rasm yuborilmadi, matn yuborilmoqda")
         await bot.send_message(chat_id, caption, reply_markup=_progress_keyboard(),
                                disable_web_page_preview=True)
 
-    # 2-xabar: gap bilan, tayyor post
+    # 2-xabar: gap bilan, do'stlarga yuborish uchun tayyor post (botga deep-link bilan)
     await asyncio.sleep(1.4)
     await bot.send_chat_action(chat_id, "typing")
     await asyncio.sleep(0.6)
@@ -159,11 +157,19 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, user_id: int, name: str)
 # ----------------- /start va ro'yxatdan o'tish -----------------
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, bot: Bot, state: FSMContext):
+async def cmd_start(message: Message, bot: Bot, state: FSMContext, command: CommandObject):
     await state.clear()
     user = message.from_user
     async with SessionLocal() as session:
         await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
+        # Deep-link payloadini o'qiymiz: "refKTKTK" -> kim taklif qilgani
+        payload = (command.args or "").strip()
+        if payload.startswith("ref"):
+            try:
+                referrer_id = int(payload[3:])
+                await svc.set_referred_by(session, user.id, referrer_id)
+            except ValueError:
+                pass
         registered = await svc.is_registered(session, user.id)
 
     if registered:
@@ -276,7 +282,12 @@ async def cb_progress(call: CallbackQuery):
 
 @router.callback_query(F.data == "my_link")
 async def cb_link(call: CallbackQuery, bot: Bot):
-    link = await ensure_invite_link(bot, call.from_user.id)
+    link = referral_link(call.from_user.id)
+    await call.message.answer(
+        f"🔗 Sizning shaxsiy taklif havolangiz:\n{link}\n\n"
+        "Do'stlaringizga quyidagi postni yuboring 👇",
+        disable_web_page_preview=True,
+    )
     await call.message.answer(_share_post(link), disable_web_page_preview=True)
     await call.answer()
 
@@ -309,11 +320,9 @@ async def cmd_stats(message: Message):
 
 @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_join(event: ChatMemberUpdated, bot: Bot):
+    # Foydalanuvchi kanalga obuna bo'ldi. Uni KIM taklif qilganini (referred_by) topamiz
+    # va o'sha taklif qiluvchiga ball beramiz.
     if CHANNEL_CHAT_ID is not None and event.chat.id != CHANNEL_CHAT_ID:
-        return
-
-    invite = event.invite_link
-    if invite is None:
         return
 
     joined = event.new_chat_member.user
@@ -321,37 +330,36 @@ async def on_join(event: ChatMemberUpdated, bot: Bot):
         return
 
     async with SessionLocal() as session:
-        referrer = await svc.find_referrer_by_link(session, invite.invite_link)
-        if referrer is None and invite.name:
-            referrer = await svc.find_referrer_by_link_name(session, invite.name)
-        if referrer is None:
-            logger.info("Noma'lum havola orqali qo'shilish: %s", invite.invite_link)
+        await svc.mark_channel_joined(session, joined.id, True)
+        referrer_id = await svc.get_referred_by(session, joined.id)
+        if referrer_id is None:
+            # To'g'ridan-to'g'ri kelgan yoki botda ro'yxatdan o'tmagan — ball yo'q
             return
 
         is_new = await svc.record_join(
-            session, referrer.id, joined.id, joined.username, _full_name(joined)
+            session, referrer_id, joined.id, joined.username, _full_name(joined)
         )
         if not is_new:
             return
 
-        new_rewards = await svc.award_new_rewards(session, referrer.id)
-        count = await svc.active_count(session, referrer.id)
+        new_rewards = await svc.award_new_rewards(session, referrer_id)
+        count = await svc.active_count(session, referrer_id)
 
     try:
         await bot.send_message(
-            referrer.id,
-            f"🎉 Yangi a'zo qo'shildi! Sizning natijangiz: <b>{count} ta</b>.",
+            referrer_id,
+            f"🎉 Sizning havolangiz orqali yangi a'zo qo'shildi! Natijangiz: <b>{count} ta</b>.",
         )
         for r in new_rewards:
             await bot.send_message(
-                referrer.id,
+                referrer_id,
                 f"🏆 <b>Tabriklaymiz!</b> Siz yangi darajani yutib oldingiz!\n\n"
                 f"🎁 {r.title}\n"
                 f"🔑 Chegirma kodingiz: <code>{r.code}</code>\n\n"
                 "Ushbu kodni klinikada ko'rsating.",
             )
     except Exception:
-        logger.warning("Referrerga (%s) xabar yuborib bo'lmadi", referrer.id)
+        logger.warning("Referrerga (%s) xabar yuborib bo'lmadi", referrer_id)
 
 
 # ----------------- chat_member: CHIQISH -----------------
@@ -362,6 +370,7 @@ async def on_leave(event: ChatMemberUpdated):
         return
     left_user = event.new_chat_member.user
     async with SessionLocal() as session:
+        await svc.mark_channel_joined(session, left_user.id, False)
         await svc.record_leave(session, left_user.id)
 
 
@@ -374,8 +383,14 @@ def build_dispatcher() -> Dispatcher:
 
 
 async def resolve_channel(bot: Bot) -> None:
-    """Kanalning raqamli ID sini aniqlab, modul o'zgaruvchisiga saqlaydi."""
-    global CHANNEL_CHAT_ID
+    """Kanal ID si va bot username ini aniqlab, modul o'zgaruvchilariga saqlaydi."""
+    global CHANNEL_CHAT_ID, BOT_USERNAME
+    try:
+        me = await bot.get_me()
+        BOT_USERNAME = me.username
+        logger.info("Bot aniqlandi: @%s", BOT_USERNAME)
+    except Exception:
+        logger.exception("Bot username ni aniqlab bo'lmadi")
     try:
         chat = await bot.get_chat(_channel_arg())
         CHANNEL_CHAT_ID = chat.id

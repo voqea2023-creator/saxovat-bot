@@ -53,6 +53,34 @@ async def is_registered(session: AsyncSession, user_id: int) -> bool:
     return bool(ref and ref.reg_name and ref.phone)
 
 
+async def set_referred_by(session: AsyncSession, user_id: int, referrer_id: int) -> None:
+    """
+    Bu foydalanuvchini kim taklif qilganini belgilaydi.
+    Faqat bir marta o'rnatiladi (birinchi taklif qiluvchi yutadi), o'z-o'zini taklif sanalmaydi.
+    """
+    if user_id == referrer_id:
+        return
+    ref = await session.get(Referrer, user_id)
+    if ref and ref.referred_by is None:
+        # taklif qiluvchi mavjudligini tekshiramiz
+        upline = await session.get(Referrer, referrer_id)
+        if upline is not None:
+            ref.referred_by = referrer_id
+            await session.commit()
+
+
+async def get_referred_by(session: AsyncSession, user_id: int) -> Optional[int]:
+    ref = await session.get(Referrer, user_id)
+    return ref.referred_by if ref else None
+
+
+async def mark_channel_joined(session: AsyncSession, user_id: int, joined: bool = True) -> None:
+    ref = await session.get(Referrer, user_id)
+    if ref:
+        ref.joined_channel = joined
+        await session.commit()
+
+
 async def set_invite_link(session: AsyncSession, user_id: int, link: str, name: str) -> None:
     ref = await session.get(Referrer, user_id)
     if ref:

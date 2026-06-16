@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Ko'rsatish uchun kanal nomi (ixtiyoriy), masalan "Sahovat Shifo".
     CHANNEL_TITLE: str = "Sahovat Shifo"
 
+    # Bot @username (ixtiyoriy zaxira). Bo'sh bo'lsa, startupda get_me orqali avtomatik aniqlanadi.
+    BOT_USERNAME: str = ""
+
     # Bot ichida admin hisoblanadigan Telegram user ID lar (vergul bilan).
     ADMIN_IDS: str = ""
 
