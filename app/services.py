@@ -255,6 +255,12 @@ async def redeem_reward(session: AsyncSession, reward_id: int, by: str, note: st
     return True
 
 
+async def all_user_ids(session: AsyncSession) -> list[int]:
+    """Botdagi barcha foydalanuvchilar (referrerlar) ID si — broadcast uchun."""
+    res = await session.execute(select(Referrer.id))
+    return [int(x) for x in res.scalars().all()]
+
+
 async def totals(session: AsyncSession) -> dict:
     referrers = int((await session.execute(select(func.count(Referrer.id)))).scalar() or 0)
     active = int(

@@ -58,6 +58,11 @@ class Reg(StatesGroup):
     phone = State()
 
 
+class Broadcast(StatesGroup):
+    """Broadcast (hammaga xabar) bosqichlari."""
+    content = State()
+
+
 def _channel_arg() -> int | str:
     """CHANNEL_ID ni int yoki @username sifatida qaytaradi."""
     val = settings.CHANNEL_ID.strip()
@@ -314,6 +319,108 @@ async def cmd_stats(message: Message):
         name = ref.reg_name or ref.full_name or (f"@{ref.username}" if ref.username else str(ref.id))
         lines.append(f"{i}. {name} — {cnt} ta")
     await message.answer("\n".join(lines))
+
+
+# ----------------- /myid (Telegram ID ni bilish) -----------------
+
+@router.message(Command("myid"))
+async def cmd_myid(message: Message):
+    await message.answer(
+        f"Sizning Telegram ID raqamingiz: <code>{message.from_user.id}</code>\n\n"
+        "Admin huquqi uchun shu ID ni ADMIN_IDS sozlamasiga qo'shing."
+    )
+
+
+# ----------------- /broadcast (faqat admin) -----------------
+
+def _broadcast_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Hammaga yuborish", callback_data="bc_send"),
+            InlineKeyboardButton(text="❌ Bekor qilish", callback_data="bc_cancel"),
+        ]]
+    )
+
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext):
+    if message.from_user.id not in settings.admin_ids:
+        return
+    await state.set_state(Broadcast.content)
+    await message.answer(
+        "📢 <b>Broadcast</b>\n\n"
+        "Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring "
+        "(matn, rasm, video — istalgan ko'rinishda).\n\n"
+        "Bekor qilish uchun: /bekor"
+    )
+
+
+@router.message(Command("bekor"))
+async def cmd_bekor(message: Message, state: FSMContext):
+    cur = await state.get_state()
+    if cur is not None:
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(Broadcast.content)
+async def broadcast_content(message: Message, state: FSMContext):
+    if message.text and message.text.strip() in ("/bekor", "/cancel"):
+        await state.clear()
+        await message.answer("Bekor qilindi.")
+        return
+    await state.update_data(from_chat=message.chat.id, msg_id=message.message_id)
+    async with SessionLocal() as session:
+        count = len(await svc.all_user_ids(session))
+    await message.answer(
+        f"Yuqoridagi xabar <b>{count} ta</b> foydalanuvchiga yuboriladi. Tasdiqlaysizmi?",
+        reply_markup=_broadcast_confirm_kb(),
+    )
+
+
+@router.callback_query(F.data == "bc_cancel")
+async def bc_cancel(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("❌ Broadcast bekor qilindi.")
+    await call.answer()
+
+
+@router.callback_query(F.data == "bc_send")
+async def bc_send(call: CallbackQuery, bot: Bot, state: FSMContext):
+    if call.from_user.id not in settings.admin_ids:
+        await call.answer("Ruxsat yo'q", show_alert=True)
+        return
+    data = await state.get_data()
+    await state.clear()
+    from_chat = data.get("from_chat")
+    msg_id = data.get("msg_id")
+    if not from_chat or not msg_id:
+        await call.answer("Xabar topilmadi", show_alert=True)
+        return
+
+    async with SessionLocal() as session:
+        ids = await svc.all_user_ids(session)
+
+    await call.message.edit_text(f"📤 Yuborilmoqda... (0/{len(ids)})")
+    sent = failed = 0
+    for i, uid in enumerate(ids, 1):
+        try:
+            await bot.copy_message(chat_id=uid, from_chat_id=from_chat, message_id=msg_id)
+            sent += 1
+        except Exception:
+            failed += 1
+        if i % 25 == 0:
+            try:
+                await call.message.edit_text(f"📤 Yuborilmoqda... ({i}/{len(ids)})")
+            except Exception:
+                pass
+        await asyncio.sleep(0.05)  # flud-limitдан saqlanish
+
+    await call.message.edit_text(
+        f"✅ Broadcast yakunlandi.\n\nYuborildi: <b>{sent}</b>\nYuborilmadi: <b>{failed}</b> "
+        "(botni bloklaganlar)"
+    )
+    await call.answer()
 
 
 # ----------------- chat_member: QO'SHILISH -----------------
