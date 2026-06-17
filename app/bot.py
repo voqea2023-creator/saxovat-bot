@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile, BufferedInputFile,
 )
 
 from .config import settings
@@ -97,6 +97,22 @@ def _phone_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+# Asosiy menyu tugmalari (doimiy pastki klaviatura)
+BTN_RESULTS = "📄 Diagnostika javoblarim"
+BTN_PROGRESS = "📊 Mening natijam"
+BTN_LINK = "🔗 Taklif havolam"
+
+
+def _main_menu_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_RESULTS)],
+            [KeyboardButton(text=BTN_PROGRESS), KeyboardButton(text=BTN_LINK)],
+        ],
+        resize_keyboard=True,
+    )
+
+
 # ----------------- Matnlar -----------------
 
 def _welcome_caption(name: str) -> str:
@@ -156,7 +172,44 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, user_id: int, name: str)
     await asyncio.sleep(1.4)
     await bot.send_chat_action(chat_id, "typing")
     await asyncio.sleep(0.6)
-    await bot.send_message(chat_id, _share_post(link), disable_web_page_preview=True)
+    await bot.send_message(
+        chat_id, _share_post(link),
+        disable_web_page_preview=True, reply_markup=_main_menu_kb(),
+    )
+
+
+# ----------------- Diagnostika natijalari (yetkazish) -----------------
+
+async def deliver_result(bot: Bot, chat_id: int, r) -> bool:
+    """Bitta natijani bemorga yuboradi (matn / file_id / blob)."""
+    cap = f"📄 <b>{r.result_type}</b>"
+    if r.title:
+        cap += f"\n{r.title}"
+    try:
+        if r.content_text:
+            await bot.send_message(chat_id, cap + "\n\n" + r.content_text)
+        elif r.file_id:
+            if r.is_photo:
+                await bot.send_photo(chat_id, r.file_id, caption=cap)
+            else:
+                await bot.send_document(chat_id, r.file_id, caption=cap)
+        elif r.file_blob:
+            f = BufferedInputFile(r.file_blob, filename=r.file_name or "natija")
+            if r.is_photo:
+                await bot.send_photo(chat_id, f, caption=cap)
+            else:
+                await bot.send_document(chat_id, f, caption=cap)
+        else:
+            return False
+        return True
+    except Exception:
+        logger.warning("Natijani yuborib bo'lmadi: chat=%s", chat_id)
+        return False
+
+
+def _extract_phone(text: str) -> str | None:
+    m = re.search(r"\+?\d[\d\s\-]{6,}\d", text or "")
+    return m.group(0).strip() if m else None
 
 
 # ----------------- /start va ro'yxatdan o'tish -----------------
@@ -231,6 +284,8 @@ async def reg_phone(message: Message, bot: Bot, state: FSMContext):
     async with SessionLocal() as session:
         await svc.set_registration(session, user.id, phone=phone[:32])
         ref = await svc.get_or_create_referrer(session, user.id, user.username, _full_name(user))
+        # CRM kartasini avtomatik yaratamiz
+        await svc.seed_lead_from_user(session, user.id, ref.reg_name, ref.phone)
     await state.clear()
     await message.answer("✅ Ro'yxatdan o'tdingiz! Rahmat.", reply_markup=ReplyKeyboardRemove())
     await send_welcome_sequence(bot, message.chat.id, user.id, ref.reg_name or _full_name(user))
@@ -295,6 +350,54 @@ async def cb_link(call: CallbackQuery, bot: Bot):
     )
     await call.message.answer(_share_post(link), disable_web_page_preview=True)
     await call.answer()
+
+
+# ----------------- Diagnostika javoblarim (bemor) -----------------
+
+async def _send_results(message: Message, bot: Bot):
+    from .models import Referrer
+    uid = message.from_user.id
+    async with SessionLocal() as session:
+        ref = await session.get(Referrer, uid)
+        phone = ref.phone if ref else None
+        results = list(await svc.results_by_phone(session, phone)) if phone else []
+    if not phone:
+        await message.answer("Avval /start bosib ro'yxatdan o'ting — natijalar telefon raqamingiz orqali topiladi.")
+        return
+    if not results:
+        await message.answer(
+            "📭 Hozircha siz uchun diagnostika natijasi yo'q.\n"
+            "Natija tayyor bo'lganda shu yerga avtomatik keladi."
+        )
+        return
+    await message.answer(f"📄 Siz uchun {len(results)} ta natija topildi:")
+    for r in results:
+        await deliver_result(bot, message.chat.id, r)
+
+
+@router.message(Command("natijalarim"))
+async def cmd_results(message: Message, bot: Bot):
+    await _send_results(message, bot)
+
+
+@router.message(F.text == BTN_RESULTS)
+async def btn_results(message: Message, bot: Bot):
+    await _send_results(message, bot)
+
+
+@router.message(F.text == BTN_PROGRESS)
+async def btn_progress(message: Message):
+    await _send_progress(message, message.from_user.id)
+
+
+@router.message(F.text == BTN_LINK)
+async def btn_link(message: Message):
+    link = referral_link(message.from_user.id)
+    await message.answer(
+        f"🔗 Sizning shaxsiy taklif havolangiz:\n{link}\n\nDo'stlaringizga quyidagi postni yuboring 👇",
+        disable_web_page_preview=True,
+    )
+    await message.answer(_share_post(link), disable_web_page_preview=True)
 
 
 # ----------------- /stats (faqat admin) -----------------
@@ -421,6 +524,54 @@ async def bc_send(call: CallbackQuery, bot: Bot, state: FSMContext):
         "(botni bloklaganlar)"
     )
     await call.answer()
+
+
+# ----------------- Admin: bot orqali natija yuklash -----------------
+
+@router.message(F.document | F.photo)
+async def admin_upload_result(message: Message, bot: Bot):
+    # Faqat adminlar fayl yubora oladi (telefon raqami caption'da bo'lishi shart)
+    if message.from_user.id not in settings.admin_ids:
+        return
+    caption = (message.caption or "").strip()
+    phone = _extract_phone(caption)
+    if not phone:
+        await message.answer(
+            "📎 Natija yuklash uchun faylni telefon raqami bilan izoh (caption) qilib yuboring.\n"
+            "Masalan: <code>+998901234567 UZD natijasi</code>"
+        )
+        return
+    title = caption.replace(phone, "").strip(" |-—\n") or None
+
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        is_photo = True
+        file_name = None
+    else:
+        file_id = message.document.file_id
+        is_photo = False
+        file_name = message.document.file_name
+
+    async with SessionLocal() as session:
+        r = await svc.add_result(
+            session, phone=phone, title=title, file_id=file_id,
+            is_photo=is_photo, file_name=file_name, uploaded_via="bot",
+        )
+        ref = await svc.find_referrer_by_phone(session, phone)
+
+    sent = False
+    if ref:
+        sent = await deliver_result(bot, ref.id, r)
+        if sent:
+            async with SessionLocal() as session:
+                await svc.mark_result_delivered(session, r.id)
+
+    await message.answer(
+        f"✅ Natija saqlandi (tel: {phone}).\n" + (
+            "📤 Bemorga avtomatik yuborildi." if sent
+            else "ℹ️ Bemor hali botda ro'yxatdan o'tmagan — keyin 'Diagnostika javoblarim' tugmasi orqali oladi."
+        )
+    )
 
 
 # ----------------- chat_member: QO'SHILISH -----------------

@@ -1,7 +1,8 @@
 """SQLAlchemy modellar."""
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import (
-    BigInteger, String, DateTime, ForeignKey, Integer, UniqueConstraint, func,
+    BigInteger, String, DateTime, Date, ForeignKey, Integer, UniqueConstraint,
+    LargeBinary, Boolean, Text, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -80,3 +81,49 @@ class Reward(Base):
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     referrer: Mapped["Referrer"] = relationship(back_populates="rewards")
+
+
+class Lead(Base):
+    """CRM kartasi (bemor/mijoz). Kanban ustunlari = status."""
+    __tablename__ = "leads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    phone_norm: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    service: Mapped[str | None] = mapped_column(String(255), nullable=True)   # qaysi xizmat
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Kanban ustuni: yangi / boglanildi / yozildi / keldi / kuzatuv
+    status: Mapped[str] = mapped_column(String(32), default="yangi", index=True)
+    next_contact: Mapped[date | None] = mapped_column(Date, nullable=True)  # keyingi aloqa sanasi
+
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # botdagi user (bo'lsa)
+    source: Mapped[str] = mapped_column(String(32), default="manual")  # manual / bot
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class Result(Base):
+    """Diagnostika natijasi / doktor xulosasi. Telefon orqali bemorga biriktiriladi."""
+    __tablename__ = "results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    phone: Mapped[str] = mapped_column(String(32))
+    phone_norm: Mapped[str] = mapped_column(String(32), index=True)
+    patient_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    result_type: Mapped[str] = mapped_column(String(64), default="Natija")  # Tahlil/UZD/Doktor xulosasi
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Fayl: bot orqali kelса file_id, panel orqali kelса blob. Yoki matnli natija.
+    file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_photo: Mapped[bool] = mapped_column(Boolean, default=False)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    uploaded_via: Mapped[str] = mapped_column(String(16), default="panel")  # panel / bot
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

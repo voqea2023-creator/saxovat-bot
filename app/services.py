@@ -2,14 +2,23 @@
 Biznes-logika: DB bilan ishlovchi yordamchi funksiyalar.
 Bot va web dashboard shular orqali ma'lumotlar bazasiga murojaat qiladi.
 """
-from datetime import datetime
+import re
+from datetime import datetime, date
 from typing import Optional, Sequence
 
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Referrer, Referral, Reward
+from .models import Referrer, Referral, Reward, Lead, Result
 from . import rewards as rw
+
+
+def normalize_phone(phone: Optional[str]) -> str:
+    """Telefonni solishtirish uchun normallashtirish: faqat raqamlar, oxirgi 9 ta (O'zbekiston)."""
+    if not phone:
+        return ""
+    digits = re.sub(r"\D", "", phone)
+    return digits[-9:] if len(digits) >= 9 else digits
 
 
 # ---------------- Referrer ----------------
@@ -279,3 +288,141 @@ async def totals(session: AsyncSession) -> dict:
         )).scalar() or 0
     )
     return {"referrers": referrers, "active_members": active, "rewards_earned": earned, "rewards_redeemed": redeemed}
+
+
+# ==================== CRM (Lead / Kanban) ====================
+
+# Kanban ustunlari (kalit, ko'rinadigan nom). Bemor "yopilmaydi" — oxirgisi doimiy kuzatuv.
+STAGES = [
+    ("yangi", "Yangi"),
+    ("boglanildi", "Bog'lanildi"),
+    ("yozildi", "Qabulga yozildi"),
+    ("keldi", "Xizmat ko'rsatildi"),
+    ("kuzatuv", "Kuzatuvda"),
+]
+STAGE_KEYS = [k for k, _ in STAGES]
+
+
+async def create_lead(session: AsyncSession, name=None, phone=None, service=None,
+                      status="yangi", note=None, next_contact=None,
+                      telegram_id=None, source="manual") -> Lead:
+    lead = Lead(
+        name=name, phone=phone, phone_norm=normalize_phone(phone), service=service,
+        status=status if status in STAGE_KEYS else "yangi", note=note,
+        next_contact=next_contact, telegram_id=telegram_id, source=source,
+    )
+    session.add(lead)
+    await session.commit()
+    return lead
+
+
+async def get_lead(session: AsyncSession, lead_id: int) -> Optional[Lead]:
+    return await session.get(Lead, lead_id)
+
+
+async def update_lead(session: AsyncSession, lead_id: int, **fields) -> bool:
+    lead = await session.get(Lead, lead_id)
+    if not lead:
+        return False
+    for k, v in fields.items():
+        if hasattr(lead, k):
+            setattr(lead, k, v)
+    if "phone" in fields:
+        lead.phone_norm = normalize_phone(fields.get("phone"))
+    await session.commit()
+    return True
+
+
+async def move_lead(session: AsyncSession, lead_id: int, status: str) -> bool:
+    if status not in STAGE_KEYS:
+        return False
+    lead = await session.get(Lead, lead_id)
+    if not lead:
+        return False
+    lead.status = status
+    await session.commit()
+    return True
+
+
+async def delete_lead(session: AsyncSession, lead_id: int) -> bool:
+    lead = await session.get(Lead, lead_id)
+    if not lead:
+        return False
+    await session.delete(lead)
+    await session.commit()
+    return True
+
+
+async def leads_by_status(session: AsyncSession) -> dict:
+    res = await session.execute(select(Lead).order_by(Lead.updated_at.desc()))
+    leads = res.scalars().all()
+    grouped = {k: [] for k in STAGE_KEYS}
+    for lead in leads:
+        grouped.setdefault(lead.status, []).append(lead)
+    return grouped
+
+
+async def seed_lead_from_user(session: AsyncSession, telegram_id: int,
+                              name: Optional[str], phone: Optional[str]) -> None:
+    """Botda ro'yxatdan o'tgan foydalanuvchi uchun CRM kartasi yaratadi (agar yo'q bo'lsa)."""
+    res = await session.execute(select(Lead).where(Lead.telegram_id == telegram_id))
+    if res.scalar_one_or_none() is not None:
+        return
+    norm = normalize_phone(phone)
+    if norm:
+        res2 = await session.execute(select(Lead).where(Lead.phone_norm == norm))
+        if res2.scalar_one_or_none() is not None:
+            return
+    session.add(Lead(name=name, phone=phone, phone_norm=norm,
+                     status="yangi", telegram_id=telegram_id, source="bot"))
+    await session.commit()
+
+
+# ==================== Diagnostika natijalari (Result) ====================
+
+async def add_result(session: AsyncSession, phone: str, result_type="Natija", title=None,
+                     file_id=None, file_blob=None, file_name=None, is_photo=False,
+                     content_text=None, patient_name=None, uploaded_via="panel") -> Result:
+    r = Result(
+        phone=phone, phone_norm=normalize_phone(phone), patient_name=patient_name,
+        result_type=result_type, title=title, file_id=file_id, file_blob=file_blob,
+        file_name=file_name, is_photo=is_photo, content_text=content_text,
+        uploaded_via=uploaded_via,
+    )
+    session.add(r)
+    await session.commit()
+    return r
+
+
+async def results_by_phone(session: AsyncSession, phone: str) -> Sequence[Result]:
+    norm = normalize_phone(phone)
+    if not norm:
+        return []
+    res = await session.execute(
+        select(Result).where(Result.phone_norm == norm).order_by(Result.created_at.desc())
+    )
+    return res.scalars().all()
+
+
+async def recent_results(session: AsyncSession, limit: int = 50) -> Sequence[Result]:
+    res = await session.execute(select(Result).order_by(Result.created_at.desc()).limit(limit))
+    return res.scalars().all()
+
+
+async def mark_result_delivered(session: AsyncSession, result_id: int) -> None:
+    r = await session.get(Result, result_id)
+    if r:
+        r.delivered = True
+        await session.commit()
+
+
+async def find_referrer_by_phone(session: AsyncSession, phone: str) -> Optional[Referrer]:
+    """Telefon raqami orqali botdagi foydalanuvchini topadi (normallashtirilgan solishtirish)."""
+    norm = normalize_phone(phone)
+    if not norm:
+        return None
+    res = await session.execute(select(Referrer).where(Referrer.phone.isnot(None)))
+    for ref in res.scalars().all():
+        if normalize_phone(ref.phone) == norm:
+            return ref
+    return None
