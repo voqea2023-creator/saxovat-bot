@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sahovat Shifo Bot", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET, max_age=60 * 60 * 12)
+app.state.bot = bot  # web route'lar (broadcast) shu bot orqali xabar yuboradi
 app.include_router(web_router)
 
 
