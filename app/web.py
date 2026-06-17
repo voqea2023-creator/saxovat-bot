@@ -1,14 +1,20 @@
 """Admin web dashboard (FastAPI router)."""
 import os
-from fastapi import APIRouter, Request, Form, Depends
+import asyncio
+from datetime import datetime
+from fastapi import APIRouter, Request, Form, Depends, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import BufferedInputFile
 
 from .config import settings
-from .db import get_session
+from .db import get_session, SessionLocal
 from . import services as svc
 from . import rewards as rw
+
+# Broadcast holati (panelда ko'rsatish uchun, xotirada saqlanadi)
+BROADCAST_STATUS = {"running": False, "sent": 0, "failed": 0, "total": 0, "finished_at": None}
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -117,6 +123,75 @@ async def redeem(
         return guard
     await svc.redeem_reward(session, reward_id, by="admin", note=note)
     return RedirectResponse("/admin/rewards", status_code=302)
+
+
+# ---------------- Broadcast (hammaga xabar) ----------------
+
+async def _run_broadcast(bot, ids, text, image_bytes, image_name):
+    """Fonda barcha foydalanuvchilarga xabar yuboradi."""
+    BROADCAST_STATUS.update(running=True, sent=0, failed=0, total=len(ids), finished_at=None)
+    file_id = None
+    for uid in ids:
+        try:
+            if image_bytes:
+                if file_id:
+                    await bot.send_photo(uid, file_id, caption=text or None)
+                else:
+                    msg = await bot.send_photo(
+                        uid, BufferedInputFile(image_bytes, filename=image_name or "image.jpg"),
+                        caption=text or None,
+                    )
+                    if msg.photo:
+                        file_id = msg.photo[-1].file_id  # qayta yuklamaslik uchun file_id ni saqlaymiz
+            else:
+                await bot.send_message(uid, text)
+            BROADCAST_STATUS["sent"] += 1
+        except Exception:
+            BROADCAST_STATUS["failed"] += 1
+        await asyncio.sleep(0.05)  # flud-limitdan saqlanish
+    BROADCAST_STATUS.update(running=False, finished_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M"))
+
+
+@router.get("/admin/broadcast", response_class=HTMLResponse)
+async def broadcast_page(request: Request, started: str = "", error: str = "",
+                         session: AsyncSession = Depends(get_session)):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+    count = len(await svc.all_user_ids(session))
+    return templates.TemplateResponse(
+        request, "broadcast.html",
+        {"count": count, "status": BROADCAST_STATUS, "started": started, "error": error},
+    )
+
+
+@router.post("/admin/broadcast")
+async def broadcast_send(
+    request: Request,
+    background: BackgroundTasks,
+    text: str = Form(""),
+    image: UploadFile = File(None),
+    session: AsyncSession = Depends(get_session),
+):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+    if BROADCAST_STATUS["running"]:
+        return RedirectResponse("/admin/broadcast?error=Hozir+yuborish+ketmoqda", status_code=302)
+
+    text = (text or "").strip()
+    image_bytes = None
+    image_name = None
+    if image is not None and image.filename:
+        image_bytes = await image.read()
+        image_name = image.filename
+    if not text and not image_bytes:
+        return RedirectResponse("/admin/broadcast?error=Matn+yoki+rasm+kiriting", status_code=302)
+
+    ids = await svc.all_user_ids(session)
+    bot = request.app.state.bot
+    background.add_task(_run_broadcast, bot, ids, text, image_bytes, image_name)
+    return RedirectResponse("/admin/broadcast?started=1", status_code=302)
 
 
 @router.get("/healthz")
