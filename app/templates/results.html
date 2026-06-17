@@ -1,86 +1,63 @@
-<!doctype html>
-<html lang="uz">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Diagnostika natijalari — Sahovat Shifo</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-  <nav class="navbar navbar-expand navbar-dark" style="background:#D11E26">
-    <div class="container-fluid">
-      <span class="navbar-brand">🏥 Sahovat Shifo — Admin</span>
-      <div class="navbar-nav">
-        <a class="nav-link" href="/admin">Reyting</a>
-        <a class="nav-link" href="/admin/crm">CRM</a>
-        <a class="nav-link active" href="/admin/results">Natijalar</a>
-        <a class="nav-link" href="/admin/rewards">Chegirmalar</a>
-        <a class="nav-link" href="/admin/broadcast">Broadcast</a>
-        <a class="nav-link" href="/admin/logout">Chiqish</a>
+{% extends "base.html" %}
+{% set active = 'results' %}
+{% block page_title %}Natijalar{% endblock %}
+{% block header %}Diagnostika natijalari{% endblock %}
+
+{% block content %}
+  {% if started %}<div class="alert alert-success">Natija saqlandi. Bemor botda ro'yxatdan o'tgan bo'lsa — avtomatik yuborildi.</div>{% endif %}
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <div class="card card-body mb-4" style="max-width:880px;">
+    <h6 class="mb-3">📄 Natija yuklash</h6>
+    <form method="post" action="/admin/results/upload" enctype="multipart/form-data" class="row g-3">
+      <div class="col-md-5">
+        <label class="form-label">Telefon raqami *</label>
+        <input name="phone" class="form-control" placeholder="+998901234567" required>
+        <div class="form-text">Natija shu raqam egasiga (botda) biriktiriladi.</div>
       </div>
-    </div>
-  </nav>
-
-  <div class="container py-4" style="max-width: 820px;">
-    <h5 class="mb-3">📄 Diagnostika natijasi yuklash</h5>
-
-    {% if started %}<div class="alert alert-success">Natija saqlandi. Bemor botda ro'yxatdan o'tgan bo'lsa — avtomatik yuborildi.</div>{% endif %}
-    {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-
-    <div class="card card-body mb-4">
-      <form method="post" action="/admin/results/upload" enctype="multipart/form-data" class="row g-3">
-        <div class="col-md-5">
-          <label class="form-label">Telefon raqami *</label>
-          <input name="phone" class="form-control" placeholder="+998901234567" required>
-          <div class="form-text">Natija shu raqam egasiga (botda) biriktiriladi.</div>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">Tur</label>
-          <input name="result_type" class="form-control" value="Natija" placeholder="UZD / Tahlil / Doktor xulosasi">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Sarlavha</label>
-          <input name="title" class="form-control" placeholder="ixtiyoriy">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Fayl (PDF yoki rasm)</label>
-          <input type="file" name="file" class="form-control" accept="image/*,application/pdf">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Yoki matn (fayl o'rniga)</label>
-          <textarea name="text" class="form-control" rows="1" placeholder="Qisqa xulosa matni..."></textarea>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-danger">Saqlash va yuborish</button>
-        </div>
-      </form>
-    </div>
-
-    <h6 class="mb-2">Oxirgi yuklangan natijalar</h6>
-    <div class="card shadow-sm">
-      <div class="table-responsive">
-        <table class="table table-sm mb-0 align-middle">
-          <thead class="table-light">
-            <tr><th>Sana</th><th>Telefon</th><th>Tur</th><th>Sarlavha</th><th>Manba</th><th>Holat</th></tr>
-          </thead>
-          <tbody>
-            {% for r in items %}
-            <tr>
-              <td class="small">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}</td>
-              <td>{{ r.phone }}</td>
-              <td>{{ r.result_type }}</td>
-              <td class="small">{{ r.title or ('📎 ' + r.file_name if r.file_name else ('📝 matn' if r.content_text else '')) }}</td>
-              <td><span class="badge bg-secondary">{{ r.uploaded_via }}</span></td>
-              <td>{% if r.delivered %}<span class="badge bg-success">Yuborildi</span>{% else %}<span class="badge bg-warning text-dark">Kutilmoqda</span>{% endif %}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="6" class="text-center text-muted py-3">Hozircha natija yo'q</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div class="col-md-4">
+        <label class="form-label">Tur</label>
+        <input name="result_type" class="form-control" value="Natija" placeholder="UZD / Tahlil / Doktor xulosasi">
       </div>
-    </div>
-    <p class="text-muted small mt-2">Eslatma: bot orqali ham yuklash mumkin — adminlar botga faylni telefon raqami bilan izoh qilib yuborsa bo'ladi.</p>
+      <div class="col-md-3">
+        <label class="form-label">Sarlavha</label>
+        <input name="title" class="form-control" placeholder="ixtiyoriy">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Fayl (PDF yoki rasm)</label>
+        <input type="file" name="file" class="form-control" accept="image/*,application/pdf">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Yoki matn (fayl o'rniga)</label>
+        <textarea name="text" class="form-control" rows="1" placeholder="Qisqa xulosa matni..."></textarea>
+      </div>
+      <div class="col-12"><button class="btn btn-primary">Saqlash va yuborish</button></div>
+    </form>
   </div>
-</body>
-</html>
+
+  <h6 class="mb-2">Oxirgi yuklangan natijalar</h6>
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-sm mb-0 align-middle">
+        <thead>
+          <tr><th>Sana</th><th>Telefon</th><th>Tur</th><th>Sarlavha</th><th>Manba</th><th>Holat</th></tr>
+        </thead>
+        <tbody>
+          {% for r in items %}
+          <tr>
+            <td class="small">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}</td>
+            <td>{{ r.phone }}</td>
+            <td>{{ r.result_type }}</td>
+            <td class="small">{{ r.title or ('📎 ' + r.file_name if r.file_name else ('📝 matn' if r.content_text else '')) }}</td>
+            <td><span class="badge bg-secondary">{{ r.uploaded_via }}</span></td>
+            <td>{% if r.delivered %}<span class="badge bg-success">Yuborildi</span>{% else %}<span class="badge bg-warning text-dark">Kutilmoqda</span>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="text-center text-muted py-3">Hozircha natija yo'q</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p class="text-muted small mt-2">Bot orqali ham yuklash mumkin — adminlar botga faylni telefon raqami bilan izoh qilib yuborsa bo'ladi.</p>
+{% endblock %}
